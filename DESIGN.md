@@ -76,9 +76,11 @@ The first implementation slice is a read-only design-listing tool. The remaining
 | `server_info` | None | None | Meshery Server version and supported capability metadata | Read-only | Authentication, connectivity, and upstream failures return a tool error without exposing credentials. |
 | `list_meshery_designs` | None | `page` (integer, minimum 1), `page_size` (integer, 1–100), `search` (string) | `designs` array plus `page`, `page_size`, and `total_count` | Read-only | Invalid input returns an invalid-params error. Authentication, connectivity, and upstream failures return a tool error. |
 | `export_meshery_design` | `design_id` (string) | `format` (`yaml` or `json`; default `yaml`) | `design_id`, `format`, and exported `content` | Read-only | Invalid input or unsupported format returns invalid params. Not-found, authentication, and upstream failures return a tool error. |
-| `snapshot_meshery_design` | `design_id` (string) | `name` (string) | Snapshot identifier and metadata | State-changing if the Meshery API persists a snapshot | Invalid input, not-found, authentication, and upstream failures return a tool error. |
+| `snapshot_meshery_design` | `design_id` (string) | `name` (string) | Snapshot identifier and metadata | Pending API confirmation | Invalid input, not-found, authentication, and upstream failures return a tool error. |
 | `get_deployment_dry_run` | `design_id` (string) | None | `design_id`, status, and dry-run output | Read-only | Invalid input, not-found, authentication, and upstream failures return a tool error. |
 | `get_performance_test_results` | `design_id` (string) | `page` (integer, minimum 1), `page_size` (integer, 1–100) | `results` array plus `page`, `page_size`, and `total_count` | Read-only | Invalid input returns invalid params. Authentication and upstream failures return a tool error. |
+
+The final safety classification for `snapshot_meshery_design` depends on whether the Meshery API persists a snapshot. It must be classified as state-changing if it creates or stores a snapshot; otherwise it may be classified as read-only.
 
 Tool names and input fields are MCP-facing contracts and should remain stable once released. The shared Meshery client owns REST endpoint paths, HTTP status handling, request serialization, and Meshery API response decoding. Individual tools own MCP input validation and mapping client/domain results into the documented MCP result shape.
 
