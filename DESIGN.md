@@ -45,6 +45,20 @@ The shared Meshery client is the single integration layer between MCP tools and 
 
 MCP tools must use the shared client rather than directly construct REST requests, authorization headers, or authentication cookies. This keeps individual tools independent of the final authentication implementation and consistent with the repository configuration contract.
 
+### Authentication contract
+
+The shared Meshery client is the only layer that applies authentication to outbound REST requests. MCP tools must not read credentials, construct authorization headers, or manage cookies directly.
+
+The initial configuration contract is:
+
+- `MESHERY_SERVER_URL` provides the Meshery Server base URL.
+- `MESHERY_API_TOKEN` is optional. When configured, the client sends it as `Authorization: Bearer <token>`.
+- Cookie-based authentication is outside the initial MCP tool scope.
+
+The client applies the configured authentication mechanism consistently to every request. If an endpoint requires a different mechanism later, it must be added to the shared client instead of being implemented separately by individual tools.
+
+The client must not log API tokens, authorization headers, cookies, or complete URLs containing credentials.
+
 ### Data Shape and Pagination
 
 For the list-designs API, the known REST response fields include `page`, `pageSize`, `totalCount`, and `patterns`.
@@ -55,18 +69,31 @@ Where a tool transforms a REST response, the transformation should be explicit a
 
 ## Initial MCP Tools
 
-The initial scope of MCP tools is expected to cover:
+The first implementation slice is a read-only design-listing tool. The remaining tools below are planned contracts and should be implemented only after their Meshery API behavior is validated.
 
-- **List Meshery designs**: Retrieve designs available in Meshery, with documented pagination metadata.
-- **Export a design**: Export a selected design in a requested format, such as YAML or JSON.
-- **Snapshot a design**: Create a snapshot of a design at a point in time.
-- **Retrieve deployment dry-run results**: Access dry-run outputs associated with a design.
-- **Retrieve performance test results**: Access performance-test results associated with a design.
+| MCP tool | Required inputs | Optional inputs | Structured result | Safety | Error behavior |
+|---|---|---|---|---|---|
+| `server_info` | None | None | Meshery Server version and supported capability metadata | Read-only | Authentication, connectivity, and upstream failures return a tool error without exposing credentials. |
+| `list_meshery_designs` | None | `page` (integer, minimum 1), `page_size` (integer, 1–100), `search` (string) | `designs` array plus `page`, `page_size`, and `total_count` | Read-only | Invalid input returns an invalid-params error. Authentication, connectivity, and upstream failures return a tool error. |
+| `export_meshery_design` | `design_id` (string) | `format` (`yaml` or `json`; default `yaml`) | `design_id`, `format`, and exported `content` | Read-only | Invalid input or unsupported format returns invalid params. Not-found, authentication, and upstream failures return a tool error. |
+| `snapshot_meshery_design` | `design_id` (string) | `name` (string) | Snapshot identifier and metadata | State-changing if the Meshery API persists a snapshot | Invalid input, not-found, authentication, and upstream failures return a tool error. |
+| `get_deployment_dry_run` | `design_id` (string) | None | `design_id`, status, and dry-run output | Read-only | Invalid input, not-found, authentication, and upstream failures return a tool error. |
+| `get_performance_test_results` | `design_id` (string) | `page` (integer, minimum 1), `page_size` (integer, 1–100) | `results` array plus `page`, `page_size`, and `total_count` | Read-only | Invalid input returns invalid params. Authentication and upstream failures return a tool error. |
 
-These tools will build on the shared Meshery client and return structured JSON responses and human-readable error messages suitable for MCP clients and AI agents.
+Tool names and input fields are MCP-facing contracts and should remain stable once released. The shared Meshery client owns REST endpoint paths, HTTP status handling, request serialization, and Meshery API response decoding. Individual tools own MCP input validation and mapping client/domain results into the documented MCP result shape.
+
+Each concrete tool registers through the server's `Registrant` interface. A tool should receive a narrow client or service interface through its constructor, which allows tests to use a fake client rather than requiring a live Meshery Server.
 
 ## Future Tool Candidates
 
 The Meshery MCP proof of concept also demonstrates read-only access to MeshSync-discovered Kubernetes resources and Kubernetes cluster connections. These are promising future tool candidates.
 
 Before they are added to the main MCP Server scope, they should be proposed as separate issues and aligned with maintainer priorities, the shared Meshery client, and the project transport strategy.
+
+## Tool Safety and Confirmation
+
+Tool descriptions and registrations must declare whether a tool is read-only, state-changing, or potentially destructive.
+
+Read-only tools must not modify Meshery state. State-changing tools must describe their side effects. Potentially destructive operations must require explicit confirmation behavior before execution when they are introduced.
+
+Safety metadata belongs with the concrete MCP tool definition so clients and AI agents can discover it programmatically; this document defines the intended contract for those annotations.
