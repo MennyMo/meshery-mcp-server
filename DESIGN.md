@@ -47,21 +47,26 @@ MCP tools must use the shared client rather than directly construct REST request
 
 ### Authentication contract
 
+### Authentication contract
+
 The shared Meshery client is the only layer that applies authentication to outbound REST requests. MCP tools must not read credentials, construct authorization headers, or manage cookies directly.
 
-The initial configuration contract is:
+The initial authentication contract uses Meshery session cookies:
 
-- `MESHERY_SERVER_URL` provides the Meshery Server base URL.
-- `MESHERY_API_TOKEN` is optional. When configured, the client sends it as `Authorization: Bearer <token>`.
-- Cookie-based authentication is outside the initial MCP tool scope.
+- `token`
+- `meshery-provider`
 
-The client applies the configured authentication mechanism consistently to every request. If an endpoint requires a different mechanism later, it must be added to the shared client instead of being implemented separately by individual tools.
+Meshery CLI login writes these credentials to `~/.meshery/auth.json`. The shared client is responsible for loading configured credentials, attaching the required cookies to applicable REST requests, and keeping authentication behavior consistent across tools.
+
+The initial MCP tool scope does not use `Authorization: Bearer <token>` for the Meshery data routes. If another endpoint requires a different mechanism later, that mechanism must be implemented in the shared client rather than separately by individual tools.
+
+The client must not log authentication cookies, credential values, authorization headers, or complete URLs containing credentials.
 
 The client must not log API tokens, authorization headers, cookies, or complete URLs containing credentials.
 
 ### Data Shape and Pagination
 
-For the list-designs API, the known REST response fields include `page`, `pageSize`, `totalCount`, and `patterns`.
+For the list-designs API, the `/api/pattern` REST response fields include `page`, `pageSize`, `totalCount`, and `patterns`.
 
 The shared Meshery client should use explicit JSON tags or equivalent field mapping to correctly parse Meshery's camelCase response fields. The `list_designs` MCP tool should expose a documented, stable response contract that identifies returned design data and pagination metadata.
 
