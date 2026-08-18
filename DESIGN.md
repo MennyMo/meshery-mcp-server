@@ -47,8 +47,6 @@ MCP tools must use the shared client rather than directly construct REST request
 
 ### Authentication contract
 
-### Authentication contract
-
 The shared Meshery client is the only layer that applies authentication to outbound REST requests. MCP tools must not read credentials, construct authorization headers, or manage cookies directly.
 
 The initial authentication contract uses Meshery session cookies:
@@ -61,8 +59,6 @@ Meshery CLI login writes these credentials to `~/.meshery/auth.json`. The shared
 The initial MCP tool scope does not use `Authorization: Bearer <token>` for the Meshery data routes. If another endpoint requires a different mechanism later, that mechanism must be implemented in the shared client rather than separately by individual tools.
 
 The client must not log authentication cookies, credential values, authorization headers, or complete URLs containing credentials.
-
-The client must not log API tokens, authorization headers, cookies, or complete URLs containing credentials.
 
 ### Data Shape and Pagination
 
@@ -79,7 +75,7 @@ The first implementation slice is a read-only design-listing tool. The remaining
 | MCP tool | Required inputs | Optional inputs | Structured result | Safety | Error behavior |
 |---|---|---|---|---|---|
 | `server_info` | None | None | Meshery Server version and supported capability metadata | Read-only | Authentication, connectivity, and upstream failures return a tool error without exposing credentials. |
-| `list_meshery_designs` | None | `page` (integer, minimum 1), `page_size` (integer, 1–100), `search` (string) | `designs` array plus `page`, `page_size`, and `total_count` | Read-only | Invalid input returns an invalid-params error. Authentication, connectivity, and upstream failures return a tool error. |
+| `list_designs` | None | `page` (integer, minimum 1), `page_size` (integer, 1–100), `search` (string) | `designs` array plus `page`, `page_size`, and `total_count` | Read-only | Invalid input returns an invalid-params error. Authentication, connectivity, and upstream failures return a tool error. |
 | `export_meshery_design` | `design_id` (string) | `format` (`yaml` or `json`; default `yaml`) | `design_id`, `format`, and exported `content` | Read-only | Invalid input or unsupported format returns invalid params. Not-found, authentication, and upstream failures return a tool error. |
 | `snapshot_meshery_design` | `design_id` (string) | `name` (string) | Snapshot identifier and metadata | Pending API confirmation | Invalid input, not-found, authentication, and upstream failures return a tool error. |
 | `get_deployment_dry_run` | `design_id` (string) | None | `design_id`, status, and dry-run output | Read-only | Invalid input, not-found, authentication, and upstream failures return a tool error. |
@@ -101,6 +97,8 @@ Before they are added to the main MCP Server scope, they should be proposed as s
 
 Tool descriptions and registrations must declare whether a tool is read-only, state-changing, or potentially destructive.
 
-Read-only tools must not modify Meshery state. State-changing tools must describe their side effects. Potentially destructive operations must require explicit confirmation behavior before execution when they are introduced.
+Read-only tools must not modify Meshery state. The MCP SDK's read-only defaults should be used where applicable. A tool that changes state or has destructive effects must explicitly override those defaults and describe its side effects.
+
+Potentially destructive operations must require explicit confirmation behavior before execution when they are introduced.
 
 Safety metadata belongs with the concrete MCP tool definition so clients and AI agents can discover it programmatically; this document defines the intended contract for those annotations.
