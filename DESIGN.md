@@ -85,7 +85,8 @@ The final safety classification for `snapshot_meshery_design` depends on whether
 
 Tool names and input fields are MCP-facing contracts and should remain stable once released. The shared Meshery client owns REST endpoint paths, HTTP status handling, request serialization, and Meshery API response decoding. Individual tools own MCP input validation and mapping client/domain results into the documented MCP result shape.
 
-Each concrete tool registers through the server's `Registrant` interface. A tool should receive a narrow client or service interface through its constructor, which allows tests to use a fake client rather than requiring a live Meshery Server.
+Each concrete tool registers through the server's `Registrant` interface. The first tools may receive the concrete shared Meshery client during construction.
+When `list_designs` is implemented, the project should evaluate whether a narrow tool-facing client interface materially improves testability or separation before introducing another abstraction.
 
 ## Future Tool Candidates
 
