@@ -14,7 +14,6 @@ import (
 	"github.com/meshery-extensions/meshery-mcp-server/internal/meshery"
 )
 
-
 func TestIntegration_ListDesigns(t *testing.T) {
 	// 1. Establish an isolated temporary workspace for the credentials file
 	tmpDir, err := os.MkdirTemp("", "meshery-mcp-test")
