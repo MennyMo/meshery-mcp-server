@@ -1,3 +1,3 @@
 module github.com/meshery-extensions/meshery-mcp-server
 
-go 1.26.6
+go 1.23
