@@ -1,105 +1,182 @@
-# Meshery MCP Server – Design
+# Meshery MCP Server: Architecture and Registration Design
 
-## Goals
+## 1. Overview
 
-The Meshery MCP Server extension is intended to:
+`meshery-mcp-server` is a standalone Model Context Protocol (MCP) extension that enables MCP-capable AI clients, such as Claude Desktop, Cursor, and VS Code extensions, to safely consume Meshery capabilities.
 
-- Provide an AI-native interface to Meshery through the Model Context Protocol (MCP).
-- Enable AI agents and other MCP clients to create, inspect, export, and analyze Meshery designs and related artifacts.
-- Establish clear, stable tool contracts that can grow with Meshery capabilities without duplicating server or client infrastructure.
+The server is a client-facing protocol boundary. It translates MCP tool and resource requests into calls to Meshery Server; it does not become a Meshery adapter, access Kubernetes directly, or duplicate Meshery Server business logic.
 
-## Architecture Overview
+The initial release is deliberately read-only. Its purpose is to prove authenticated connectivity, safe response handling, and a maintainable extension model before adding any infrastructure-changing capability.
 
-At a high level, the MCP Server consists of:
+## 2. Transport and Request Flow
 
-- **MCP Server**: The server process that implements MCP and exposes tools to MCP clients.
-- **Shared Meshery client**: The common client layer used by MCP tools to communicate with Meshery Server.
-- **MCP tools**: Focused tool implementations for Meshery designs, deployment workflows, and test results.
+The initial transport is local `stdio`, allowing an MCP client to launch the server as a local subprocess.
 
-The MCP Server is a thin layer that translates MCP tool calls into Meshery client operations and returns structured, predictable results suitable for MCP clients.
+Streamable HTTP is a future transport and deployment milestone. Tool, resource, and client-boundary logic must remain transport-agnostic so that later HTTP support does not require rewriting capability implementations.
 
-The implementation builds on the repository foundation established by the MCP Server scaffold. This includes the selected Go MCP SDK, an initial stdio transport, the shared server and tool-registration structure, and common configuration support. Tool implementations should extend this foundation instead of introducing parallel server or registration patterns.
+```text
+AI Client / IDE
+      |
+      | MCP protocol over stdio
+      v
+Meshery MCP Server
+      |
+      | Tool or resource handler
+      v
+Shared Meshery Server Client
+      |
+      | Authenticated request to Meshery Server API
+      v
+Meshery Server
+      |
+      v
+Meshery-managed capabilities, adapters, MeshSync, and connected infrastructure
+```
 
-## Transport Considerations
+## 3. Shared Meshery Server Client Boundary
 
-The initial MCP Server transport is stdio. This aligns with the repository foundation and provides a focused starting point for local MCP client integrations.
+All MCP tools and resources communicate with Meshery Server through one shared client boundary, located under `internal/meshery`.
 
-The MCP Server core should remain transport-agnostic so additional transports can be considered later when they are supported by the project foundation and maintainer priorities. The existing proof of concept provides useful implementation input for future transport work, but it does not determine the main project transport strategy.
+Individual tools and resources must not:
 
-## Meshery REST Integration
+- Construct their own HTTP clients.
+- Read raw tokens, session cookies, kubeconfig files, passwords, or private keys.
+- Implement their own retry, timeout, redirect, TLS, or error-handling behavior.
+- Shell out to `mesheryctl`.
+- Bypass Meshery Server to communicate directly with adapters or Kubernetes clusters.
 
-The initial MCP tools will use Meshery's existing REST APIs through the shared Meshery client.
+The shared client boundary is responsible for:
 
-REST is the practical initial integration path because the required Meshery Server APIs, external-client workflows, and JSON response shapes already exist. Introducing a separate gRPC integration would require new protobuf contracts and corresponding server-side services for the required resources.
+- Resolving Meshery Server configuration.
+- Constructing authenticated requests using the existing Meshery authentication context.
+- Applying centralized timeout, TLS, retry/backoff, redirect, and health-check behavior.
+- Normalizing Meshery Server API errors, including known non-standard responses such as application error bodies returned with successful HTTP status codes or login redirects.
+- Returning typed, safe results to MCP tools and resources.
 
-Streaming-oriented capabilities, including MeshSync or other live-state workflows, are outside the initial scope. They can be evaluated later without changing the core MCP tool architecture.
+### Authentication and Context
 
-### Shared client responsibilities
+Meshery Server remains the authority for authentication, authorization, provider selection, and infrastructure routing.
 
-The shared Meshery client is the single integration layer between MCP tools and Meshery Server. It is responsible for:
+MCP tools receive an already-authenticated Meshery Server client; they never receive raw credentials. The exact v0.1 credential mechanism and endpoint compatibility requirements must be validated against a running Meshery Server and recorded in the shared-client ADR before implementation is treated as final.
 
-- Meshery Server base-URL configuration.
-- Authentication configuration and request handling.
-- REST request execution and error handling.
-- Explicit mapping of Meshery API response fields.
+For local interactive use, the server will consume the user’s existing Meshery authentication context. CI may provide equivalent configuration through environment variables. Secrets must never appear in MCP tool input schemas, responses, errors, or logs.
 
-MCP tools must use the shared client rather than directly construct REST requests, authorization headers, or authentication cookies. This keeps individual tools independent of the final authentication implementation and consistent with the repository configuration contract.
+### Required Client-Boundary Investigation
 
-### Authentication contract
+Before the shared-client design is finalized, the project must document:
 
-The shared Meshery client is the only layer that applies authentication to outbound REST requests. MCP tools must not read credentials, construct authorization headers, or manage cookies directly.
+- The existing package and symbols responsible for Meshery Server URL/configuration resolution.
+- Server discovery and connection setup behavior.
+- Session/token loading and authenticated request construction.
+- TLS, timeout, retry/backoff, and health-check handling.
+- Existing Meshery API error-normalization behavior.
+- Which components can be reused independently of the adapter interface.
 
-The initial authentication contract uses Meshery session cookies:
+The investigation outcome must be captured in an ADR with exact repository paths, symbols, findings, trade-offs, and a recommendation for reuse, extraction, or a narrow new client implementation.
 
-- `token`
-- `meshery-provider`
+## 4. Registration Model
 
-Meshery CLI login writes these credentials to `~/.meshery/auth.json`. The shared client is responsible for loading configured credentials, attaching the required cookies to applicable REST requests, and keeping authentication behavior consistent across tools.
+Tools, resources, and future prompts are registered through a descriptor-based Registrant/Registry seam.
 
-The initial MCP tool scope does not use `Authorization: Bearer <token>` for the Meshery data routes. If another endpoint requires a different mechanism later, that mechanism must be implemented in the shared client rather than separately by individual tools.
+Each registrant declares:
 
-The client must not log authentication cookies, credential values, authorization headers, or complete URLs containing credentials.
+- Name.
+- Input and output schemas.
+- Handler.
+- Safety classification.
+- MCP annotations derived from that classification.
 
-### Data Shape and Pagination
+The registration layer centrally enforces the read-only gate and maps safety classifications to MCP annotations. Tool packages must not independently decide how to apply safety policy.
 
-For the list-designs API, the `/api/pattern` REST response fields include `page`, `pageSize`, `totalCount`, and `patterns`.
+MCP SDK-specific types remain behind this registration seam so that SDK migration does not require rewriting individual tools.
 
-The shared Meshery client should use explicit JSON tags or equivalent field mapping to correctly parse Meshery's camelCase response fields. The `list_designs` MCP tool should expose a documented, stable response contract that identifies returned design data and pagination metadata.
+## 5. Tool and Resource Scope
 
-Where a tool transforms a REST response, the transformation should be explicit and documented so MCP clients and AI agents receive predictable, stable results.
+### v0.1: Read-only Tooling
 
-## Initial MCP Tools
+The first mandatory vertical slice is:
 
-The first implementation slice is a read-only design-listing tool. The remaining tools below are planned contracts and should be implemented only after their Meshery API behavior is validated.
+```text
+list_designs
+```
 
-| MCP tool | Required inputs | Optional inputs | Structured result | Safety | Error behavior |
-|---|---|---|---|---|---|
-| `server_info` | None | None | Meshery Server version and supported capability metadata | Read-only | Authentication, connectivity, and upstream failures return a tool error without exposing credentials. |
-| `list_designs` | None | `page` (integer, minimum 1), `page_size` (integer, 1–100), `search` (string) | `designs` array plus `page`, `page_size`, and `total_count` | Read-only | Invalid input returns an invalid-params error. Authentication, connectivity, and upstream failures return a tool error. |
-| `export_meshery_design` | `design_id` (string) | `format` (`yaml` or `json`; default `yaml`) | `design_id`, `format`, and exported `content` | Read-only | Invalid input or unsupported format returns invalid params. Not-found, authentication, and upstream failures return a tool error. |
-| `snapshot_meshery_design` | `design_id` (string) | `name` (string) | Snapshot identifier and metadata | Pending API confirmation | Invalid input, not-found, authentication, and upstream failures return a tool error. |
-| `get_deployment_dry_run` | `design_id` (string) | None | `design_id`, status, and dry-run output | Read-only | Invalid input, not-found, authentication, and upstream failures return a tool error. |
-| `get_performance_test_results` | `design_id` (string) | `page` (integer, minimum 1), `page_size` (integer, 1–100) | `results` array plus `page`, `page_size`, and `total_count` | Read-only | Invalid input returns invalid params. Authentication and upstream failures return a tool error. |
+`list_designs` is complete only when it:
 
-The final safety classification for `snapshot_meshery_design` depends on whether the Meshery API persists a snapshot. It must be classified as state-changing if it creates or stores a snapshot; otherwise it may be classified as read-only.
+- Uses the shared authenticated Meshery Server client.
+- Runs against a real or Dockerized Meshery Server.
+- Supports the selected Meshery API pagination model.
+- Produces structured, token-conscious output.
+- Normalizes Meshery Server failures into honest, actionable errors.
+- Sanitizes successful and failed results before MCP serialization.
+- Has unit and integration test coverage.
 
-Tool names and input fields are MCP-facing contracts and should remain stable once released. The shared Meshery client owns REST endpoint paths, HTTP status handling, request serialization, and Meshery API response decoding. Individual tools own MCP input validation and mapping client/domain results into the documented MCP result shape.
+`server_info` may be considered as a smaller preliminary connectivity check if maintainers choose it, but it does not replace the need for one complete read-only vertical slice.
 
-Each concrete tool registers through the server's `Registrant` interface. The first tools may receive the concrete shared Meshery client during construction.
-When `list_designs` is implemented, the project should evaluate whether a narrow tool-facing client interface materially improves testability or separation before introducing another abstraction.
+### Future Candidate Tools
 
-## Future Tool Candidates
+Future read-only candidates may include design retrieval/export, dry-run or validation result retrieval, MeshSync resource inspection, environment/workspace information, and performance-test result retrieval.
 
-The Meshery MCP proof of concept also demonstrates read-only access to MeshSync-discovered Kubernetes resources and Kubernetes cluster connections. These are promising future tool candidates.
+Each future tool requires its own issue or tool contract defining API mapping, input/output schemas, safety classification, error behavior, and acceptance criteria.
 
-Before they are added to the main MCP Server scope, they should be proposed as separate issues and aligned with maintainer priorities, the shared Meshery client, and the project transport strategy.
+### Explicitly Deferred
 
-## Tool Safety and Confirmation
+The following are not part of v0.1:
 
-Tool descriptions and registrations must declare whether a tool is read-only, state-changing, or potentially destructive.
+- Deploy, undeploy, create, update, or delete operations.
+- Direct Kubernetes access or kubeconfig handling.
+- Credential or connection mutation.
+- Prompts, until a concrete Meshery-backed prompt surface is defined.
+- Remote hosted deployment.
+- In-cluster/Helm packaging.
+- Streamable HTTP implementation.
+- Long-running-operation behavior.
 
-Read-only tools must not modify Meshery state. The MCP SDK's read-only defaults should be used where applicable. A tool that changes state or has destructive effects must explicitly override those defaults and describe its side effects.
+Any future mutating operation requires explicit server-side enforcement, user confirmation/elicitation where appropriate, authorization design, auditability, idempotency requirements, and rate-limit considerations.
 
-Potentially destructive operations must require explicit confirmation behavior before execution when they are introduced.
+## 6. Security and Sanitization
 
-Safety metadata belongs with the concrete MCP tool definition so clients and AI agents can discover it programmatically; this document defines the intended contract for those annotations.
+All tool and resource outputs pass through a shared response boundary before they reach an MCP client.
+
+The response boundary must sanitize:
+
+- Successful API payloads.
+- Error bodies.
+- Log entries.
+- Task or operation state.
+- Any discovered infrastructure data that could contain credentials, Kubernetes Secret content, connection configuration, tokens, passwords, or private keys.
+
+Sanitization is a shared enforcement point, not a responsibility delegated to individual tool implementations.
+
+Errors must use Meshery’s actual MeshKit error framework and preserve safe, actionable information without leaking sensitive data.
+
+## 7. Implementation Roadmap
+
+### Milestone 0: Repository Foundation
+
+- Establish the repository structure.
+- Add module configuration, Makefile targets, linting, Docker build, CI, and README.
+- Document local development and contribution workflows.
+- Keep transport, full auth behavior, and capability implementation outside the scaffold scope.
+
+### Milestone 1: Shared Client and First Vertical Slice
+
+- Complete the shared-client investigation and ADR.
+- Implement the selected shared Meshery Server client boundary.
+- Implement `list_designs`.
+- Add centralized response/error/log sanitization.
+- Add MeshKit-aligned error mapping.
+- Add unit tests and integration tests against a real or Dockerized Meshery Server.
+- Confirm the selected authentication mechanism against the v0.1 endpoint set.
+
+### Milestone 2: Additional Read-only Capabilities
+
+- Add individually specified read-only tools and resources.
+- Add tool-schema snapshot tests.
+- Add safe resource exposure where the Server API and sanitization rules are established.
+- Evaluate streamable HTTP only after the core read-only capability path is stable.
+
+### Milestone 3: Write-capability Proposal
+
+- Produce a separate design proposal for write operations.
+- Define authorization, confirmation, auditing, idempotency, rate limiting, and dry-run expectations.
+- Do not implement mutating tools without explicit maintainer approval.
